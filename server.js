@@ -77,7 +77,8 @@ const DEFAULT_DATA = {
 function normalizeData(data) {
     const normalized = {
         customers: Array.isArray(data?.customers) ? data.customers : [],
-        debt_history: Array.isArray(data?.debt_history) ? data.debt_history : []
+        debt_history: Array.isArray(data?.debt_history) ? data.debt_history : [],
+        stops: Array.isArray(data?.stops) ? data.stops : []
     };
 
     const customerIds = new Set(normalized.customers.map(c => String(c.id)));
@@ -89,6 +90,20 @@ function normalizeData(data) {
         const totalDebt = customerHistory.reduce((sum, entry) => sum + parseInt(entry.amount || 0, 10), 0);
         return { ...customer, debt: totalDebt };
     });
+
+    // ensure stops have required fields
+    normalized.stops = normalized.stops.map(s => ({
+        id: s.id,
+        driverId: s.driverId || null,
+        lat: Number(s.lat),
+        lng: Number(s.lng),
+        startTs: Number(s.startTs) || 0,
+        endTs: Number(s.endTs) || 0,
+        duration: Number(s.duration) || 0,
+        date: s.date || null,
+        weekday: s.weekday || null,
+        name: s.name || null
+    }));
 
     return normalized;
 }
@@ -130,6 +145,62 @@ app.get('/api/customers', (req, res) => {
         result = result.filter(c => String(c.delivery_day || '').toLowerCase() === String(day).toLowerCase());
     }
     res.json(result);
+});
+
+// GET stops: optional filters: date=YYYY-MM-DD or weekday=monday
+app.get('/api/stops', (req, res) => {
+    const { date, weekday } = req.query;
+    const data = loadData();
+    let stops = Array.isArray(data.stops) ? data.stops.slice() : [];
+    if (date) {
+        stops = stops.filter(s => String(s.date) === String(date));
+    }
+    if (weekday) {
+        stops = stops.filter(s => String(s.weekday).toLowerCase() === String(weekday).toLowerCase());
+    }
+    // sort by startTs
+    stops.sort((a,b) => (a.startTs || 0) - (b.startTs || 0));
+    res.json(stops);
+});
+
+// POST new stop (manual save) - body must include lat,lng and optional driverId,name,startTs,endTs
+app.post('/api/stops', (req, res) => {
+    try {
+        const data = loadData();
+        const { lat, lng, driverId, name, startTs, endTs } = req.body || {};
+        const parsedLat = parseFloat(lat);
+        const parsedLng = parseFloat(lng);
+        if (isNaN(parsedLat) || isNaN(parsedLng)) {
+            return res.status(400).json({ success: false, error: 'invalid lat/lng' });
+        }
+        const now = Date.now();
+        const sStart = startTs ? Number(startTs) : now;
+        const sEnd = endTs ? Number(endTs) : sStart;
+        const duration = sEnd - sStart;
+        const dateObj = new Date(sStart);
+        const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth()+1).padStart(2,'0')}-${String(dateObj.getDate()).padStart(2,'0')}`;
+        const weekday = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][dateObj.getDay()];
+        const stop = {
+            id: Date.now() + Math.floor(Math.random()*1000),
+            driverId: driverId || null,
+            lat: parsedLat,
+            lng: parsedLng,
+            startTs: sStart,
+            endTs: sEnd,
+            duration: duration,
+            date: dateStr,
+            weekday: weekday,
+            name: name || null
+        };
+        data.stops = data.stops || [];
+        data.stops.push(stop);
+        saveData(data);
+        // broadcast
+        io.emit('stop:created', stop);
+        return res.json({ success: true, stop });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: 'cannot save stop' });
+    }
 });
 
 app.get('/api/customers/:id/history', (req, res) => {
@@ -299,6 +370,109 @@ app.post('/api/customers', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 loadData();
-app.listen(PORT, '0.0.0.0', () => {
+
+// Create HTTP server and attach Socket.IO for real-time tracking
+const http = require('http');
+const server = http.createServer(app);
+const { Server } = require('socket.io');
+const io = new Server(server, {
+    cors: { origin: '*' }
+});
+
+// In-memory store of last known driver positions
+const lastDriverPositions = {}; // { driverId: { lat, lng, accuracy, ts } }
+// in-memory recent positions buffer for stop detection
+const recentPositions = {}; // driverId -> [{lat,lng,accuracy,ts}]
+const DRIVER_BUFFER_MS = 5 * 60 * 1000; // keep 5 minutes of positions
+const STOP_RADIUS_M = 25; // meters
+const STOP_DWELL_MS = 90 * 1000; // 90 seconds
+
+io.on('connection', (socket) => {
+    // send current last known positions to newly connected client
+    socket.emit('drivers:initial', Object.values(lastDriverPositions));
+
+    socket.on('driver:position', (payload) => {
+        try {
+            const { driverId, lat, lng, accuracy, speed, heading, ts } = payload || {};
+            if (!driverId || typeof lat !== 'number' || typeof lng !== 'number') return;
+            const now = Date.now();
+            const entry = { driverId, lat, lng, accuracy: Number(accuracy || 0), speed: Number(speed || 0), heading: Number(heading || 0), ts: ts || now };
+            lastDriverPositions[driverId] = entry;
+
+            // push to recentPositions buffer
+            if (!recentPositions[driverId]) recentPositions[driverId] = [];
+            recentPositions[driverId].push({ lat, lng, accuracy: Number(accuracy || 0), ts: entry.ts });
+            // prune old
+            recentPositions[driverId] = recentPositions[driverId].filter(p => (now - p.ts) <= DRIVER_BUFFER_MS);
+
+            // attempt simple stop detection: if there exists a cluster of points near current point
+            const pts = recentPositions[driverId];
+            // find points within STOP_RADIUS_M of the latest point
+            const within = pts.filter(p => distanceMeters(p.lat, p.lng, lat, lng) <= STOP_RADIUS_M);
+            if (within.length > 0) {
+                const earliest = Math.min(...within.map(p => p.ts));
+                const latest = Math.max(...within.map(p => p.ts));
+                const dwell = latest - earliest;
+                // check last recorded stop to prevent duplicates
+                const data = loadData();
+                const driverStops = data.stops ? data.stops.filter(s => s.driverId === driverId) : [];
+                const lastStop = driverStops.length ? driverStops[driverStops.length - 1] : null;
+                const lastStopEnd = lastStop ? Number(lastStop.endTs || 0) : 0;
+                const recentlyRecorded = (now - lastStopEnd) < (5 * 60 * 1000); // avoid duplicate within 5 min
+
+                if (dwell >= STOP_DWELL_MS && !recentlyRecorded) {
+                    // record stop: centroid of within points
+                    const avg = within.reduce((acc, p) => { acc.lat += p.lat; acc.lng += p.lng; return acc; }, {lat:0,lng:0});
+                    avg.lat /= within.length; avg.lng /= within.length;
+                    const startTs = earliest;
+                    const endTs = latest;
+                    const duration = endTs - startTs;
+                    const dateObj = new Date(startTs);
+                    const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth()+1).padStart(2,'0')}-${String(dateObj.getDate()).padStart(2,'0')}`;
+                    const weekday = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][dateObj.getDay()];
+                    const stop = {
+                        id: Date.now() + Math.floor(Math.random()*1000),
+                        driverId,
+                        lat: avg.lat,
+                        lng: avg.lng,
+                        startTs,
+                        endTs,
+                        duration,
+                        date: dateStr,
+                        weekday,
+                        name: null
+                    };
+                    data.stops = data.stops || [];
+                    data.stops.push(stop);
+                    saveData(data);
+                    // broadcast new stop to clients
+                    io.emit('stop:created', stop);
+                }
+            }
+
+            // broadcast to all other clients
+            socket.broadcast.emit('driver:update', entry);
+        } catch (e) {
+            // ignore malformed
+        }
+    });
+
+    socket.on('disconnect', () => {
+        // do not remove last position — keep last-known
+    });
+});
+
+// helper: distance in meters between two lat/lng
+function distanceMeters(lat1, lon1, lat2, lon2) {
+    function toRad(v) { return v * Math.PI / 180; }
+    const R = 6378137; // Earth radius in meters
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+}
+
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`[เซิร์ฟเวอร์จำค่าถาวร JSON V3.0] รันทำงานอยู่ที่พอร์ต ${PORT}`);
 });

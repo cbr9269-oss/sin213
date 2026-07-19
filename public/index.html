@@ -13,8 +13,32 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
     <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+    <!-- Socket.IO client (served by server) -->
+    <script src="/socket.io/socket.io.js"></script>
 
     <style>
+        /* floating small notification */
+        .floating-notice {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            z-index: 12000;
+            background: rgba(255,255,255,0.96);
+            border: 1px solid rgba(0,0,0,0.08);
+            padding: 8px 12px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+            font-size: 13px;
+            color: #222;
+            display: inline-flex;
+            gap: 8px;
+            align-items: center;
+            max-width: 320px;
+        }
+        .floating-notice .dot { width:10px; height:10px; border-radius:50%; background:#ff4d4f; }
+        .floating-notice .text { display:block; font-weight:600; }
+        .floating-notice .detail { display:block; font-weight:500; color:#ff4d4f; font-size:12px; margin-left:6px; }
+
         html, body { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; }
         .container { padding: 12px; text-align: center; background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.15); position: relative; z-index: 1000; }
         .status-bar { font-size: 13px; color: #666; margin-top: 5px; font-weight: bold; }
@@ -125,12 +149,34 @@
                 <span>🔄</span>
                 <span>ขออนุญาติ GPS</span>
             </button>
+            <button id="saveStopBtn" class="track-location-btn" style="border-color: #722ed1; color: #722ed1;" onclick="manualSaveStop()" title="บันทึกจุดจอดปัจจุบัน">
+                <span>📌</span>
+                <span>บันทึกจุดจอด</span>
+            </button>
+            <button id="showStopsBtn" class="track-location-btn" style="border-color: #1890ff; color: #1890ff;" onclick="toggleStopsModal()">
+                <span>🚏</span>
+                <span>จุดจอด</span>
+            </button>
         </div>
         <div id="status" class="status-bar">กำลังเปิดสัญญาณ GPS...</div>
         <div id="gpsHint" class="status-bar" style="margin-top: 2px; color: #8c8c8c; font-size: 12px;">หากไม่ขึ้น ให้กด "ขออนุญาติ GPS"</div>
     </div>
     
     <div id="map"></div>
+
+    <div id="stopsModal" class="custom-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span id="stopsModalTitle">📍 จุดจอดที่บันทึก</span>
+                <button class="btn-edit-name" onclick="closeStopsModal()">ปิด</button>
+            </div>
+            <div style="font-weight: bold; margin-bottom: 8px; color:#8c8c8c;">เลือกดูจุดจอดสำหรับ: <span id="stopsDayLabel"></span></div>
+            <div id="stopsListContainer" style="max-height: 300px; overflow-y: auto; margin-bottom: 10px;"></div>
+            <div style="text-align:center;">
+                <button class="btn btn-submit" onclick="centerToSelectedStop()">ซูมไปยังจุดที่เลือก</button>
+            </div>
+        </div>
+    </div>
 
     <div id="debtModal" class="custom-modal">
         <div class="modal-content">
@@ -172,13 +218,27 @@
         let userHasLocationPermission = false;
         let trackingZoom = 19;
         
+        // Real-time driver markers (other drivers)
+        let driverMarkers = {}; // driverId -> marker
+        // initialize Socket.IO client
+        const socket = (typeof io === 'function') ? io() : null;
+        // persistent driver id for this client (so server/other clients can identify)
+        let localDriverId = localStorage.getItem('localDriverId');
+        if (!localDriverId) {
+            localDriverId = 'drv-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
+            localStorage.setItem('localDriverId', localDriverId);
+        }
+        
+        let stopsLayerGroup = null; // layer for showing stops on map
+        let lastStopsList = []; // currently shown stops
+
         let backupHistories = {
             999: [{ amount: 50, date_record: '19/7' }, { amount: 80, date_record: '29/7' }, { amount: 100, date_record: '30/7' }, { amount: 40, date_record: '20/7' }],
             998: [{ amount: 40, date_record: '19/7' }, { amount: 70, date_record: '25/7' }, { amount: 20, date_record: '20/7' }, { amount: 20, date_record: '17/7' }, { amount: 40, date_record: '17/7' }, { amount: 90, date_record: '17/7' }],
             997: [],
             996: [{ amount: 80, date_record: '17/7' }],
             995: [{ amount: 30, date_record: '17/7' }]
-        }; 
+        };
         
         // [จุดแก้] ตัดการตั้งค่าชื่อตายตัวทิ้ง ป้องกันลูป 5 วินาทีมาดึงชื่อเก่าไปทับ
         const emergencyFallbacks = [
@@ -414,6 +474,8 @@
 
         function plotMarkers() {
             redrawMarkersSimple();
+            // if stops layer present, keep it on top
+            if (stopsLayerGroup) stopsLayerGroup.bringToFront && stopsLayerGroup.bringToFront();
         }
 
         function redrawMarkersSimple() {
@@ -684,7 +746,7 @@
         function renderModalHistoryUI(list) {
             let container = document.getElementById('modalHistoryContainer');
             container.innerHTML = "";
-             
+              
             let calculatedTotal = 0;
             if(list.length === 0) {
                 container.innerHTML = `<div style="color:#bfbfbf;text-align:center;padding:10px;">ไม่มีประวัติการติดหนี้</div>`;
@@ -711,14 +773,153 @@
                 });
             }
             document.getElementById('modalTotalDebt').innerText = `💰 ยอดรวมหนี้ทั้งหมดปัจจุบัน: ${calculatedTotal} บาท`;
-             
+              
             let targetCustomer = customers.find(c => c.id === activeCustomerId);
             if (targetCustomer && targetCustomer.debt !== calculatedTotal) {
                 targetCustomer.debt = calculatedTotal;
                 redrawMarkersSimple();
             }
-             
+              
             document.getElementById('debtModal').style.display = 'flex';
+        }
+
+        // Stops UI functions
+        function closeStopsModal() { document.getElementById('stopsModal').style.display = 'none'; }
+
+        async function fetchStopsForSelectedDay() {
+            const selectedDay = document.getElementById('daySelector').value; // monday, tuesday...
+            try {
+                const res = await fetch(`/api/stops?weekday=${encodeURIComponent(selectedDay)}`);
+                if (!res.ok) return [];
+                const list = await res.json();
+                return Array.isArray(list) ? list : [];
+            } catch (e) {
+                return [];
+            }
+        }
+
+        function clearStopsLayer() {
+            if (stopsLayerGroup) {
+                stopsLayerGroup.clearLayers();
+            }
+        }
+
+        async function toggleStopsModal() {
+            const container = document.getElementById('stopsListContainer');
+            container.innerHTML = '<div style="text-align:center;color:#8c8c8c;padding:12px;">กำลังโหลด...</div>';
+            document.getElementById('stopsDayLabel').innerText = document.getElementById('daySelector').options[document.getElementById('daySelector').selectedIndex].text;
+            document.getElementById('stopsModal').style.display = 'flex';
+            const stops = await fetchStopsForSelectedDay();
+            lastStopsList = stops;
+            renderStopsList(stops);
+            // draw stops on map
+            if (!stopsLayerGroup) stopsLayerGroup = L.layerGroup().addTo(map);
+            stopsLayerGroup.clearLayers();
+            stops.forEach((s, idx) => {
+                const iconHtml = `<div class="money-label" style="background:#fffbe6;border:1px solid rgba(0,0,0,0.08);">${idx+1}. จุด</div>`;
+                const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [0,0] });
+                const m = L.marker([s.lat, s.lng], { icon }).addTo(stopsLayerGroup);
+                m._stopIndex = idx;
+            });
+        }
+
+        function renderStopsList(stops) {
+            const container = document.getElementById('stopsListContainer');
+            container.innerHTML = '';
+            if (!stops || stops.length === 0) {
+                container.innerHTML = '<div style="text-align:center;color:#bfbfbf;padding:12px;">ไม่พบจุดจอดสำหรับวันนี้</div>';
+                return;
+            }
+            stops.forEach((s, idx) => {
+                const row = document.createElement('div');
+                row.className = 'history-item';
+                row.style.cursor = 'pointer';
+                const start = new Date(Number(s.startTs || 0));
+                const timeStr = start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                row.innerHTML = `<div><strong>${idx+1}.</strong> เวลา ${timeStr} — หยุด ${Math.round((s.duration||0)/1000)} วินาที</div>`;
+                row.onclick = () => {
+                    // center map to this stop
+                    if (s && s.lat && s.lng) {
+                        map.setView([s.lat, s.lng], 19, { animate: true });
+                    }
+                };
+                container.appendChild(row);
+            });
+        }
+
+        function centerToSelectedStop() {
+            // center to first stop if exists
+            if (lastStopsList && lastStopsList.length > 0) {
+                const s = lastStopsList[0];
+                map.setView([s.lat, s.lng], 19, { animate: true });
+            }
+        }
+
+        // manual save current position as stop
+        async function manualSaveStop() {
+            // prefer currentPosition if available, otherwise request a quick fix
+            let pos = currentPosition;
+            if (!pos) {
+                if (!navigator.geolocation) {
+                    alert('อุปกรณ์นี้ไม่รองรับ GPS');
+                    return;
+                }
+                document.getElementById('status').innerText = '⏳ กำลังขอพิกัดล่าสุดเพื่อบันทึก...';
+                try {
+                    const p = await new Promise((resolve, reject) => {
+                        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+                    });
+                    pos = { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: Math.round(p.coords.accuracy || 999), ts: Date.now() };
+                } catch (e) {
+                    alert('ไม่สามารถรับตำแหน่งได้ ขณะนี้');
+                    updateGpsHint();
+                    return;
+                }
+            }
+
+            // prepare payload
+            const now = pos.ts || Date.now();
+            const dateObj = new Date(now);
+            const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth()+1).padStart(2,'0')}-${String(dateObj.getDate()).padStart(2,'0')}`;
+            const weekday = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][dateObj.getDay()];
+
+            const payload = {
+                driverId: localDriverId,
+                lat: Number(pos.lat),
+                lng: Number(pos.lng),
+                startTs: now,
+                endTs: now,
+                name: null
+            };
+
+            try {
+                const resp = await fetch('/api/stops', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                if (!resp.ok) throw new Error('server error');
+                const result = await resp.json();
+                if (result && result.success) {
+                    alert('บันทึกจุดจอดเรียบร้อย');
+                    // append marker to stops layer if modal open
+                    const s = result.stop;
+                    if (!stopsLayerGroup) stopsLayerGroup = L.layerGroup().addTo(map);
+                    const idx = lastStopsList.length; // will not be updated server-side here, but ok for immediate UX
+                    const iconHtml = `<div class="money-label" style="background:#fffbe6;border:1px solid rgba(0,0,0,0.08);">${idx+1}. จุด</div>`;
+                    const icon = L.divIcon({ className: 'custom-div-icon', html: iconHtml, iconSize: [0,0] });
+                    const m = L.marker([s.lat, s.lng], { icon }).addTo(stopsLayerGroup);
+                // notify nearby debtors
+                try { findNearbyDebtors(s.lat, s.lng, 40).then(list => { if (list && list.length>0) showDebtNotification(list); }); } catch(e){}
+                // refresh modal list if open
+                if (document.getElementById('stopsModal').style.display === 'flex') {
+                    toggleStopsModal(); // close
+                    setTimeout(() => toggleStopsModal(), 300); // reopen to refresh list
+                }
+                } else {
+                alert('ไม่สามารถบันทึกจุดจอดได้');
+                }
+            } catch (e) {
+                alert('เกิดข้อผิดพลาดขณะบันทึกจุดจอด');
+            } finally {
+                updateGpsHint();
+            }
         }
 
         async function deleteDebtItem(customerId, deleteId, arrayIndex) {
@@ -836,6 +1037,64 @@
             return isIos && isSafari;
         }
 
+        // compute distance in meters
+        function distanceMeters(lat1, lon1, lat2, lon2) {
+            function toRad(v) { return v * Math.PI / 180; }
+            const R = 6378137;
+            const dLat = toRad(lat2 - lat1);
+            const dLon = toRad(lon2 - lon1);
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        // find nearby customers with outstanding debt within radiusMeters
+        async function findNearbyDebtors(lat, lng, radiusMeters = 40) {
+            try {
+                // Try to reuse currently loaded customers (may be filtered by day). To be safe fetch all.
+                const res = await fetch('/api/customers');
+                if (!res.ok) return [];
+                const list = await res.json();
+                if (!Array.isArray(list) || list.length === 0) return [];
+                const nearby = list.filter(c => {
+                    if (!c || !c.lat || !c.lng) return false;
+                    const debt = Number(c.debt || 0);
+                    if (debt <= 0) return false;
+                    const d = distanceMeters(lat, lng, Number(c.lat), Number(c.lng));
+                    return d <= radiusMeters;
+                }).map(c => ({ id: c.id, name: c.name, debt: Number(c.debt || 0), lat: c.lat, lng: c.lng }));
+                return nearby;
+            } catch (e) { return []; }
+        }
+
+        // show small transient notification top-left listing nearby debtors
+        function showDebtNotification(nearbyList) {
+            try {
+                if (!nearbyList || nearbyList.length === 0) return;
+                const container = document.createElement('div');
+                container.className = 'floating-notice';
+                const dot = document.createElement('div'); dot.className = 'dot';
+                const text = document.createElement('div'); text.className = 'text';
+                const detail = document.createElement('div'); detail.className = 'detail';
+                text.innerText = `มีบ้านติดหนี้ใกล้จุดจอด (${nearbyList.length})`;
+                detail.innerText = nearbyList.slice(0,4).map(c => `${getShortCustomerName(c.name)} ${c.debt}บ.`).join(' • ');
+                container.appendChild(dot);
+                const wrapper = document.createElement('div');
+                wrapper.style.display = 'flex';
+                wrapper.style.flexDirection = 'column';
+                wrapper.appendChild(text);
+                wrapper.appendChild(detail);
+                container.appendChild(wrapper);
+                document.body.appendChild(container);
+                // auto-remove after timeout with fade out
+                setTimeout(() => {
+                    container.style.transition = 'opacity 300ms ease';
+                    container.style.opacity = '0';
+                    setTimeout(() => { try { container.remove(); } catch(e) {} }, 350);
+                }, 4000);
+            } catch (e) {}
+        }
+
         function updateGpsControls() {
             const trackBtn = document.getElementById('trackLocationBtn');
             const requestBtn = document.getElementById('requestGpsBtn');
@@ -920,29 +1179,100 @@
             }
 
             const watchOptions = {
-                enableHighAccuracy: false,
+                enableHighAccuracy: true,
                 timeout: 15000,
                 maximumAge: 0
             };
 
+            // Smoothed, throttled location updates -> animate marker movement to avoid 'teleport' jumps
+            // Local smoothing state
+            let _lastLocationUpdateTs = 0;
+            let _prevSmoothPos = null; // {lat, lng}
+            const _MIN_UPDATE_INTERVAL_MS = 700; // throttle updates to ~1.4Hz
+            const _ACCURACY_THRESHOLD_M = 60; // ignore fixes worse than this
+            const _EMA_ALPHA = 0.28; // smoothing factor for exponential moving average
+            function animateMarkerTo(marker, targetLatLng, durationMs) {
+                if (!marker) return;
+                const start = performance.now();
+                const fromLatLng = marker.getLatLng();
+                const fromLat = fromLatLng.lat, fromLng = fromLatLng.lng;
+                const toLat = targetLatLng[0], toLng = targetLatLng[1];
+                const animate = (now) => {
+                    const t = Math.min(1, (now - start) / durationMs);
+                    const curLat = fromLat + (toLat - fromLat) * t;
+                    const curLng = fromLng + (toLng - fromLng) * t;
+                    marker.setLatLng([curLat, curLng]);
+                    if (t < 1) requestAnimationFrame(animate);
+                };
+                requestAnimationFrame(animate);
+            }
+
             geoWatchId = navigator.geolocation.watchPosition(
                 position => {
-                    let myLat = position.coords.latitude;
-                    let myLng = position.coords.longitude;
-                    currentPosition = { lat: myLat, lng: myLng };
+                    const now = Date.now();
+                    const accuracy = Math.round(position.coords.accuracy || 999);
+                    const rawLat = position.coords.latitude;
+                    const rawLng = position.coords.longitude;
+
+                    // update current position quickly for other logic
+                    currentPosition = { lat: rawLat, lng: rawLng, accuracy: accuracy, ts: now };
                     userHasLocationPermission = true;
-                    const accuracy = Math.round(position.coords.accuracy);
                     document.getElementById('status').innerHTML = `🔵 เชื่อมต่อ GPS เรียบร้อยแล้ว (ความแม่นยำ: ${accuracy}ม.)`;
                     updateGpsHint();
-                    let driverIcon = L.divIcon({ className: 'custom-div-icon', html: `<div class="driver-label"></div>`, iconSize: [0, 0] });
-                    if (myLocationMarker) {
-                        myLocationMarker.setLatLng([myLat, myLng]);
-                    } else {
-                        myLocationMarker = L.marker([myLat, myLng], { icon: driverIcon }).addTo(map);
+
+                    // Discard very inaccurate fixes to avoid big jumps
+                    if (accuracy > _ACCURACY_THRESHOLD_M) {
+                        document.getElementById('status').innerHTML += ' (สัญญาณอ่อน)';
+                        // still keep currentPosition but don't animate on bad fix
+                        return;
                     }
 
+                    // Throttle excessive updates
+                    if (_lastLocationUpdateTs && (now - _lastLocationUpdateTs) < _MIN_UPDATE_INTERVAL_MS) {
+                        // still update the smoothing target but skip rapid animations
+                    }
+                    _lastLocationUpdateTs = now;
+
+                    // EMA smoothing on raw coordinates
+                    if (!_prevSmoothPos) {
+                        _prevSmoothPos = { lat: rawLat, lng: rawLng };
+                    } else {
+                        _prevSmoothPos.lat = (_EMA_ALPHA * rawLat) + ((1 - _EMA_ALPHA) * _prevSmoothPos.lat);
+                        _prevSmoothPos.lng = (_EMA_ALPHA * rawLng) + ((1 - _EMA_ALPHA) * _prevSmoothPos.lng);
+                    }
+
+                    const targetLat = _prevSmoothPos.lat;
+                    const targetLng = _prevSmoothPos.lng;
+
+                    const driverIcon = L.divIcon({ className: 'custom-div-icon', html: `<div class="driver-label"></div>`, iconSize: [0, 0] });
+                    if (myLocationMarker) {
+                        // animate marker smoothly over ~700-900ms
+                        animateMarkerTo(myLocationMarker, [targetLat, targetLng], 800);
+                    } else {
+                        myLocationMarker = L.marker([targetLat, targetLng], { icon: driverIcon }).addTo(map);
+                    }
+
+                    // Emit position to server for real-time updates
+                    try {
+                        if (socket && socket.connected && localDriverId) {
+                            socket.emit('driver:position', {
+                                driverId: localDriverId,
+                                lat: targetLat,
+                                lng: targetLng,
+                                accuracy: accuracy,
+                                ts: now
+                            });
+                        }
+                    } catch (e) {}
+
                     if (isTrackingMode) {
-                        map.setView([myLat, myLng], trackingZoom, { animate: true, duration: 0.5 });
+                        // pan smoothly to follow the smoothed position
+                        try {
+                            map.panTo([targetLat, targetLng], { animate: true, duration: 0.8 });
+                        } catch (e) {
+                            // fallback to setView if panTo unsupported
+                            map.setView([targetLat, targetLng], trackingZoom, { animate: true });
+                        }
                     }
                 },
                 error => {
@@ -1064,6 +1394,55 @@
                     maximumAge: 0
                 }
             );
+        }
+
+        if (socket) {
+            // handle initial snapshot of drivers
+            socket.on('drivers:initial', (list) => {
+                try {
+                    if (!Array.isArray(list)) return;
+                    list.forEach(d => {
+                        if (!d || !d.driverId) return;
+                        if (d.driverId === localDriverId) return; // skip own
+                        const icon = L.divIcon({ className: 'custom-div-icon', html: `<div class="driver-label"></div>`, iconSize: [0,0] });
+                        const marker = L.marker([d.lat, d.lng], { icon }).addTo(map);
+                        driverMarkers[d.driverId] = { marker, last: d };
+                    });
+                } catch (e) {}
+            });
+
+            socket.on('driver:update', (d) => {
+                try {
+                    if (!d || !d.driverId) return;
+                    if (d.driverId === localDriverId) return; // skip own updates
+                    const icon = L.divIcon({ className: 'custom-div-icon', html: `<div class="driver-label"></div>`, iconSize: [0,0] });
+                    if (!driverMarkers[d.driverId]) {
+                        const m = L.marker([d.lat, d.lng], { icon }).addTo(map);
+                        driverMarkers[d.driverId] = { marker: m, last: d };
+                    } else {
+                        const entry = driverMarkers[d.driverId];
+                        // animate to new position smoothly
+                        try {
+                            animateMarkerTo(entry.marker, [d.lat, d.lng], 800);
+                        } catch (e) {
+                            entry.marker.setLatLng([d.lat, d.lng]);
+                        }
+                        entry.last = d;
+                    }
+                } catch (e) {}
+            });
+
+            // when server creates a stop (auto or manual), show nearby debtors notification
+            socket.on('stop:created', async (stop) => {
+                try {
+                    if (!stop || !stop.lat || !stop.lng) return;
+                    // find nearby customers with debt
+                    const nearby = await findNearbyDebtors(stop.lat, stop.lng, 40);
+                    if (nearby && nearby.length > 0) {
+                        showDebtNotification(nearby);
+                    }
+                } catch (e) {}
+            });
         }
 
         if ('serviceWorker' in navigator) {
