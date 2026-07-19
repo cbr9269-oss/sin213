@@ -20,7 +20,27 @@ app.use((req, res, next) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-const DATA_FILE = path.join(__dirname, 'data.json');
+// Persistent data path: prefer mounted volume specified by DATA_DIR env var (e.g., /data)
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const DATA_FILE = path.join(DATA_DIR, 'data.json');
+
+// If running with a mounted DATA_DIR (not repo dir) and there's no data file there,
+// attempt to bootstrap by copying the repo data.json (if present).
+try {
+    if (DATA_DIR !== __dirname) {
+        if (!fs.existsSync(DATA_DIR)) {
+            fs.mkdirSync(DATA_DIR, { recursive: true });
+        }
+        const repoDataFile = path.join(__dirname, 'data.json');
+        if (!fs.existsSync(DATA_FILE) && fs.existsSync(repoDataFile)) {
+            // copy initial data into the mounted volume so it becomes persistent
+            fs.copyFileSync(repoDataFile, DATA_FILE);
+            console.log(`[startup] bootstrapped data file from repo to DATA_DIR (${DATA_DIR})`);
+        }
+    }
+} catch (e) {
+    console.error('[startup] failed to prepare DATA_DIR:', e && e.message);
+}
 
 const DEFAULT_DATA = {
     customers: [
