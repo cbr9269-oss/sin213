@@ -43,22 +43,36 @@
         .container { padding: 12px; text-align: center; background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.15); position: relative; z-index: 1000; }
         .status-bar { font-size: 13px; color: #666; margin-top: 5px; font-weight: bold; }
         
-        .filter-section { margin-top: 8px; display: flex; justify-content: center; align-items: center; gap: 8px; }
+        .filter-section { margin-top: 8px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; }
         .day-select { padding: 8px 16px; font-size: 15px; font-weight: bold; border-radius: 6px; border: 2px solid #1890ff; background: white; color: #1890ff; cursor: pointer; }
         
         .track-location-btn {
-            padding: 8px 16px; 
-            font-size: 15px; 
-            font-weight: bold; 
-            border-radius: 6px; 
-            border: 2px solid #52c41a; 
-            background: white; 
-            color: #52c41a; 
+            padding: 8px 12px;
+            font-size: 14px;
+            font-weight: bold;
+            border-radius: 6px;
+            border: 2px solid #52c41a;
+            background: white;
+            color: #52c41a;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.18s ease;
             display: inline-flex;
             align-items: center;
             gap: 6px;
+            min-width: 40px;
+            white-space: nowrap;
+        }
+
+        /* Responsive: compact controls on small screens */
+        @media (max-width: 480px) {
+            .filter-section { gap: 6px; }
+            .day-select { flex: 1 1 100%; max-width: 220px; margin-bottom: 6px; }
+            .track-location-btn { padding: 6px 8px; font-size: 13px; border-radius: 6px; }
+            /* hide the textual label (second span) to save space, keep the icon visible */
+            .track-location-btn span:nth-child(2) { display: none !important; }
+            .track-location-btn span:nth-child(1) { font-size: 18px; line-height: 1; }
+            /* ensure the container doesn't get overlapped */
+            .container { padding: 10px; }
         }
         .track-location-btn:hover {
             background: #f6ffed;
