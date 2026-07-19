@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบส่งน้ำดื่ม & แผนที่เช็คพิกัดหนี้</title>
+    <meta name="theme-color" content="#1890ff">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- ไลบรารีสำหรับรวมกลุ่มหมุดป้องกันการบังกัน (Marker Cluster) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; }
+        .container { padding: 12px; text-align: center; background: white; box-shadow: 0 2px 8px rgba(0,0,0,0.15); position: relative; z-index: 1000; }
+        .status-bar { font-size: 13px; color: #666; margin-top: 5px; font-weight: bold; }
+        
+        .filter-section { margin-top: 8px; display: flex; justify-content: center; align-items: center; gap: 8px; }
+        .day-select { padding: 8px 16px; font-size: 15px; font-weight: bold; border-radius: 6px; border: 2px solid #1890ff; background: white; color: #1890ff; cursor: pointer; }
+        
+        .track-location-btn {
+            padding: 8px 16px; 
+            font-size: 15px; 
+            font-weight: bold; 
+            border-radius: 6px; 
+            border: 2px solid #52c41a; 
+            background: white; 
+            color: #52c41a; 
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .track-location-btn:hover {
+            background: #f6ffed;
+        }
+        .track-location-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background: #f5f5f5;
+            color: #999;
+            border-color: #d9d9d9;
+        }
+        .track-location-btn.active {
+            background: #52c41a;
+            color: white;
+            box-shadow: 0 0 8px rgba(82, 196, 26, 0.5);
+        }
+        
+        #map { height: calc(100vh - 125px); width: 100%; background-color: #e5e3df; }
+        
+        .custom-div-icon { overflow: visible !important; white-space: nowrap; }
+        .money-label { 
+            background: white; border: 1px solid rgba(0,0,0,0.12); border-radius: 5px; padding: 2px 6px; 
+            font-weight: bold; color: #1f1f1f; font-size: 13px; text-align: center; 
+            box-shadow: 0 1px 4px rgba(0,0,0,0.15); display: inline-flex; align-items: center; justify-content: center; transform: translate(-50%, -110%); 
+            min-width: auto; white-space: nowrap; line-height: 1.2;
+        }
+        .money-label.no-debt {
+            border-color: #52c41a;
+        }
+        .money-label .debt-amount {
+        color: #ff4d4f;
+        margin-left: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        }
+        .driver-label { 
+            background: #1890ff; border: 2px solid white; border-radius: 50%; width: 18px; height: 18px; 
+            box-shadow: 0 0 12px #1890ff; display: block; transform: translate(-5px, -5px); 
+        }
+
+        /* หน้าตากลุ่มหมุด Cluster */
+        .marker-cluster-small { background-color: rgba(24, 144, 255, 0.6); }
+        .marker-cluster-small div { background-color: rgba(24, 144, 255, 0.9); color: white; font-weight: bold; }
+        .marker-cluster-medium { background-color: rgba(255, 169, 64, 0.6); }
+        .marker-cluster-medium div { background-color: rgba(255, 169, 64, 0.9); color: white; font-weight: bold; }
+        .marker-cluster-large { background-color: rgba(255, 77, 79, 0.6); }
+        .marker-cluster-large div { background-color: rgba(255, 77, 79, 0.9); color: white; font-weight: bold; }
+
+        /* Custom Modal UI */
+        .custom-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 9999; justify-content: center; align-items: center; }
+        .modal-content { background: white; padding: 20px; border-radius: 12px; width: 90%; max-width: 400px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); text-align: left; }
+        .modal-header { font-size: 18px; font-weight: bold; margin-bottom: 12px; border-bottom: 2px solid #f0f0f0; padding-bottom: 8px; color: #1f1f1f; display: flex; justify-content: space-between; align-items: center; }
+        .btn-edit-name { background: #52c41a; color: white; border: none; padding: 4px 10px; border-radius: 4px; font-size: 13px; cursor: pointer; font-weight: bold; }
+        .btn-edit-name:hover { background: #389e0d; }
+        
+        .history-item { padding: 8px 0; border-bottom: 1px dashed #e8e8e8; font-size: 14px; color: #434343; display: flex; justify-content: space-between; align-items: center; }
+        .total-box { background: #fff1f0; border: 1px solid #ffa39e; padding: 10px; border-radius: 6px; margin: 12px 0; font-weight: bold; font-size: 16px; color: #cf1322; text-align: center; }
+        .input-group { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+        .input-group input { padding: 8px; border: 1px solid #d9d9d9; border-radius: 4px; font-size: 14px; width: calc(100% - 18px); }
+        .btn-group { margin-top: 15px; display: flex; justify-content: flex-end; gap: 8px; }
+        .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .btn-submit { background: #1890ff; color: white; }
+        .btn-close { background: #f0f0f0; color: #555; }
+        .btn-clear-all { background: #cf1322; color: white; }
+        
+        .btn-delete-item { background: #ff4d4f; color: white; border: none; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; cursor: pointer; margin-left: 10px; }
+        .btn-delete-item:hover { background: #d9363e; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h3 style="margin: 0; color: #1f1f1f;">📍 ระบบแผนที่เช็คพิกัดส่งน้ำ & ประวัติยอดหนี้แยกรายวัน</h3>
+        <div class="filter-section">
+            <label style="font-weight: bold;">🔍 เลือกดูเส้นทางวัน:</label>
+            <select id="daySelector" class="day-select" onchange="fetchCustomers()">
+                <option value="monday">วันจันทร์</option>
+                <option value="tuesday">วันอังคาร</option>
+                <option value="wednesday">วันพุธ</option>
+                <option value="thursday">วันพฤหัสบดี</option>
+                <option value="friday">วันศุกร์</option>
+            </select>
+            <button id="trackLocationBtn" class="track-location-btn" onclick="toggleTrackingMode()">
+                <span id="trackIconSpan">📍</span>
+                <span id="trackTextSpan">ติดตามตำแหน่ง</span>
+            </button>
+            <button id="requestGpsBtn" class="track-location-btn" style="border-color: #faad14; color: #faad14;" onclick="requestGpsPermission()" title="กดเพื่อขออนุญาติ GPS ใหม่">
+                <span>🔄</span>
+                <span>ขออนุญาติ GPS</span>
+            </button>
+        </div>
+        <div id="status" class="status-bar">กำลังเปิดสัญญาณ GPS...</div>
+        <div id="gpsHint" class="status-bar" style="margin-top: 2px; color: #8c8c8c; font-size: 12px;">หากไม่ขึ้น ให้กด "ขออนุญาติ GPS"</div>
+    </div>
+    
+    <div id="map"></div>
+
+    <div id="debtModal" class="custom-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span id="modalCustomerName">ชื่อลูกค้า</span>
+                <button class="btn-edit-name" onclick="editCurrentCustomerName()">✏️ แก้ชื่อ</button>
+            </div>
+            <div style="font-weight: bold; margin-bottom: 5px; color: #8c8c8c;">📜 ประวัติการค้างชำระรายวัน:</div>
+            <div id="modalHistoryContainer" style="max-height: 150px; overflow-y: auto; margin-bottom: 10px;"></div>
+            <div id="modalTotalDebt" class="total-box">ยอดหนี้รวมสุทธิ: 0 บาท</div>
+            
+            <div class="input-group">
+                <label style="font-weight: bold; font-size: 13px; color: #262626;">➕ เพิ่มรายการค้างหนี้วันนี้:</label>
+                <label style="font-size: 13px; color: #595959;">
+                    <input type="checkbox" id="partialPaymentCheckbox" style="margin-right: 6px;">
+                    จ่ายไม่ครบ (ยอดที่จ่ายจะลดจากหนี้เดิม)
+                </label>
+                <input type="number" id="newAmountInput" placeholder="กรอกจำนวนเงิน (บาท)">
+                <input type="date" id="newDateInput">
+            </div>
+            
+            <div class="btn-group">
+                <button class="btn btn-clear-all" onclick="clearAllDebtForCurrentCustomer()">ลบหนี้ทั้งหมด</button>
+                <button class="btn btn-close" onclick="closeModal()">ปิดหน้าต่าง</button>
+                <button class="btn btn-submit" onclick="submitNewDebt()">บันทึกข้อมูล</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let map;
+        let customerLayerGroup; 
+        let myLocationMarker = null;
+        let customers = [];
+        let activeCustomerId = null;
+        let isTrackingMode = false;
+        let currentPosition = null;
+        let geoWatchId = null;
+        let userHasLocationPermission = false;
+        let trackingZoom = 19;
+        
+        let backupHistories = {
+            999: [{ amount: 50, date_record: '19/7' }, { amount: 80, date_record: '29/7' }, { amount: 100, date_record: '30/7' }, { amount: 40, date_record: '20/7' }],
+            998: [{ amount: 40, date_record: '19/7' }, { amount: 70, date_record: '25/7' }, { amount: 20, date_record: '20/7' }, { amount: 20, date_record: '17/7' }, { amount: 40, date_record: '17/7' }, { amount: 90, date_record: '17/7' }],
+            997: [],
+            996: [{ amount: 80, date_record: '17/7' }],
+            995: [{ amount: 30, date_record: '17/7' }]
+        }; 
+        
+        // [จุดแก้] ตัดการตั้งค่าชื่อตายตัวทิ้ง ป้องกันลูป 5 วินาทีมาดึงชื่อเก่าไปทับ
+        const emergencyFallbacks = [
+            { id: 999, lat: 18.495127, lng: 98.897292, delivery_day: 'monday' },
+            { id: 998, lat: 18.495642, lng: 98.896973, delivery_day: 'monday' },
+            { id: 997, lat: 18.493848, lng: 98.895686, delivery_day: 'monday' },
+            { id: 996, lat: 18.494155, lng: 98.895995, delivery_day: 'monday' },
+            { id: 995, lat: 18.494467, lng: 98.896224, delivery_day: 'monday' },
+            { id: 994, lat: 18.494328, lng: 98.895938, delivery_day: 'monday' },
+            { id: 1001, lat: 18.494576, lng: 98.896291, delivery_day: 'monday' },
+            { id: 1002, lat: 18.494419, lng: 98.897410, delivery_day: 'monday' },
+            { id: 1003, lat: 18.494632, lng: 98.897388, delivery_day: 'monday' },
+            { id: 1004, lat: 18.494831, lng: 98.897486, delivery_day: 'monday' },
+            { id: 1005, lat: 18.495187, lng: 98.897840, delivery_day: 'monday' },
+            { id: 1006, lat: 18.494427, lng: 98.898073, delivery_day: 'monday' },
+            { id: 1007, lat: 18.494127, lng: 98.897816, delivery_day: 'monday' },
+            { id: 1008, lat: 18.495229, lng: 98.898811, delivery_day: 'monday' },
+            { id: 1009, lat: 18.495258, lng: 98.899005, delivery_day: 'monday' },
+            { id: 1010, lat: 18.495481, lng: 98.898448, delivery_day: 'monday' }
+        ];
+
+        function initMap() {
+            document.getElementById('daySelector').value = 'monday';
+            map = L.map('map').setView([18.495127, 98.897292], 19);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap',
+                maxZoom: 20
+            }).addTo(map);
+            
+            customerLayerGroup = L.markerClusterGroup({
+                maxClusterRadius: 35,
+                spiderfyOnMaxZoom: true,
+                showCoverageOnHover: false,
+                disableClusteringAtZoom: 20,
+                spiderfyDistanceMultiplier: 1.3
+            }).addTo(map);
+
+            map.on('contextmenu', function(e) { addNewCustomerPopup(e.latlng.lat, e.latlng.lng); });
+            map.on('zoomend', function() {
+                if (isTrackingMode) {
+                    trackingZoom = map.getZoom();
+                }
+            });
+            
+            checkGeoPermissionState();
+            updateGpsHint();
+            updateGpsControls();
+            updateOnlineStatus();
+            window.addEventListener('online', updateOnlineStatus);
+            window.addEventListener('offline', updateOnlineStatus);
+            if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1' && isIosSafari()) {
+                document.getElementById('status').innerText = '❌ iOS/Safari บน HTTP จะไม่ขอ GPS';
+            }
+            fetchCustomers();
+
+            setInterval(fetchCustomersSilent, 5000);
+        }
+
+        async function addNewCustomerPopup(lat, lng) {
+            let name = prompt("ระบุชื่อลูกค้าใหม่:"); if (!name) return;
+            let debt = prompt("ระบุยอดหนี้ก้อนแรก (บาท):", "0"); if (debt === null) return;
+            let dateInput = prompt("ระบุวันที่ (เช่น 10/7):", "10/7"); if (!dateInput) return;
+            let day = prompt("ระบุวันส่งสินค้า:", document.getElementById('daySelector').value); if (!day) return;
+
+            try {
+                const response = await fetch('/api/customers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, lat, lng, debt: parseInt(debt)||0, delivery_day: day.toLowerCase(), date_record: dateInput })
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    const newCustomer = {
+                        id: result.id,
+                        name: name,
+                        lat: lat,
+                        lng: lng,
+                        debt: parseInt(debt) || 0,
+                        delivery_day: day.toLowerCase()
+                    };
+                    
+                    customers.push(newCustomer);
+                    const displayName = getShortCustomerName(newCustomer.name);
+                    const hasDebt = newCustomer.debt > 0;
+                    let debtHtml = hasDebt ? ` <span class="debt-amount">${newCustomer.debt} บ.</span>` : '';
+                    let moneyIcon = L.divIcon({
+                        className: 'custom-div-icon',
+                        html: `<div class="money-label${hasDebt ? '' : ' no-debt'}">${displayName}${debtHtml}</div>`,
+                        iconSize: [0, 0]
+                    });
+                    
+                    let marker = L.marker([lat, lng], { icon: moneyIcon });
+                    marker.on('click', () => { showDebtHistoryModal(newCustomer); });
+                    marker.on('contextmenu', (e) => { openDeleteMarkerPopup(newCustomer, e); });
+                    
+                    customerLayerGroup.addLayer(marker);
+                }
+            } catch (e) {}
+        }
+
+        function mergeCustomersData(serverCustomers, selectedDay, serverLoaded) {
+            const fallbackList = JSON.parse(JSON.stringify(emergencyFallbacks.filter(fb => fb.delivery_day === selectedDay)));
+            const filteredDbData = Array.isArray(serverCustomers) ? serverCustomers.filter(customer => {
+                const customerDay = (customer.delivery_day || selectedDay).toString().toLowerCase();
+                return customerDay === selectedDay.toLowerCase();
+            }) : [];
+
+            const merged = serverLoaded ? filteredDbData : fallbackList;
+
+            merged.forEach(c => {
+                c.debt = Number(c.debt || 0);
+            });
+
+            return merged;
+        }
+
+        async function fetchCustomers() {
+            const selectedDay = document.getElementById('daySelector').value;
+            let dbData = [];
+            let serverLoaded = false;
+            try {
+                const response = await fetch(`/api/customers?day=${encodeURIComponent(selectedDay)}&_t=${Date.now()}`, { cache: "no-store" });
+                if(response.ok) {
+                    dbData = await response.json();
+                    serverLoaded = true;
+                }
+            } catch (error) { }
+ 
+            const temp = mergeCustomersData(dbData, selectedDay, serverLoaded);
+
+            for (let i = 0; i < temp.length; i++) {
+                let c = temp[i];
+                let historyList = [];
+                let historyLoaded = false;
+                try {
+                    const res = await fetch(`/api/customers/${c.id}/history?_t=${Date.now()}`, { cache: "no-store" });
+                    if (res.ok) {
+                        historyList = await res.json();
+                        historyLoaded = true;
+                    }
+                } catch(e) {}
+
+                if (historyLoaded && historyList.length > 0) {
+                    c.debt = historyList.reduce((sum, h) => sum + parseInt(h.amount || 0), 0);
+                    backupHistories[c.id] = historyList;
+                } else if (historyLoaded) {
+                    c.debt = 0;
+                    backupHistories[c.id] = [];
+                } else if (backupHistories[c.id] && backupHistories[c.id].length > 0) {
+                    c.debt = backupHistories[c.id].reduce((sum, h) => sum + parseInt(h.amount || 0), 0);
+                } else {
+                    c.debt = Number(c.debt || 0);
+                }
+            }
+
+            customers = temp;
+            plotMarkers();
+        }
+
+        async function fetchCustomersSilent() {
+           const selectedDay = document.getElementById('daySelector').value;
+           try {
+               const response = await fetch(`/api/customers?day=${encodeURIComponent(selectedDay)}&_t=${Date.now()}`, { cache: "no-store" });
+               if(response.ok) {
+                   let dbData = await response.json();
+                   customers = mergeCustomersData(dbData, selectedDay, true);
+                   if (document.getElementById('debtModal').style.display === 'flex' && activeCustomerId) {
+                       let activeCust = customers.find(c => c.id === activeCustomerId);
+                       if (activeCust) {
+                           document.getElementById('modalCustomerName').innerText = `👤 ลูกค้า: ${activeCust.name}`;
+                       }
+                   }
+               }
+           } catch (error) {}
+        }
+
+        function getShortCustomerName(fullName) {
+            if (!fullName || !String(fullName).trim()) {
+                return 'ไม่ระบุชื่อ';
+            }
+            let name = String(fullName).trim();
+            const prefixes = ['บ้าน', 'อ้าย', 'พ่อ', 'แม่', 'ลุง', 'ป้า', 'น้า', 'พี่', 'ย่า', 'ยาย'];
+ 
+            // Remove any numeric size or quantity suffixes such as 2กป, 3ล, 1กป หรือหมายเลขที่ไม่จำเป็น
+            name = name.replace(/\d+[\u0E00-\u0E7F]+/g, '').replace(/\d+/g, '').replace(/\s+/g, ' ').trim();
+            // Remove trailing debt labels like 'ค้าง : 35 บ.' so only the customer name remains
+            name = name.replace(/ค้าง\s*[:：]?\s*.*$/i, '').trim();
+            name = name.replace(/^บ้าน\s*/i, '').trim();
+            name = name.replace(/^\s*(?:อ้าย|พ่อ|แม่|ลุง|ป้า|น้า|พี่|ย่า|ยาย)\s*/i, '').trim();
+
+            if (/บ้าน/.test(name) && !/^บ้าน/i.test(name)) {
+                const match = name.match(/.*บ้าน\s*([^\s]+).*/i);
+                if (match && match[1]) {
+                    return match[1].replace(/\s+[0-9]+[^\s]*$/, '').trim();
+                }
+            }
+
+            if (name.includes('-')) {
+                const parts = name.split(/[-–—]+/).map(p => p.trim()).filter(Boolean);
+                if (parts.length > 1) {
+                    const part = parts[parts.length - 1].replace(/\s+[0-9]+[^\s]*$/, '').trim();
+                    if (part) {
+                        return part;
+                    }
+                }
+            }
+
+            const tokens = name.split(/\s+/).filter(Boolean);
+            const filteredTokens = tokens.filter(token => !/^\d+[\u0E00-\u0E7F]*$/.test(token));
+            if (filteredTokens.length === 0) {
+                return name.replace(/\s+[0-9]+[^\s]*$/, '').trim() || 'ไม่ระบุชื่อ';
+            }
+
+            if (filteredTokens.length === 1) {
+                const token = filteredTokens[0];
+                for (const prefix of prefixes) {
+                    if (token.startsWith(prefix) && token.length > prefix.length) {
+                        return token.slice(prefix.length).trim();
+                    }
+                }
+                return token.replace(/\s+[0-9]+[^\s]*$/, '').trim();
+            }
+
+            if (prefixes.includes(filteredTokens[0])) {
+                return filteredTokens[1];
+            }
+
+            return filteredTokens[0].replace(/\s+[0-9]+[^\s]*$/, '').trim();
+        }
+
+        function plotMarkers() {
+            redrawMarkersSimple();
+        }
+
+        function redrawMarkersSimple() {
+            customerLayerGroup.clearLayers();
+            customers.forEach(customer => {
+                const safeDebt = Number(customer.debt || 0);
+                const hasDebt = safeDebt > 0;
+                const displayName = getShortCustomerName(customer.name);
+                let debtHtml = hasDebt ? ` <span class="debt-amount">${safeDebt} บ.</span>` : '';
+                let moneyIcon = L.divIcon({
+                    className: 'custom-div-icon',
+                    html: `<div class="money-label${hasDebt ? '' : ' no-debt'}">${displayName}${debtHtml}</div>`,
+                    iconSize: [0, 0]
+                });
+                let marker = L.marker([customer.lat, customer.lng], { icon: moneyIcon });
+                marker.on('click', () => { showDebtHistoryModal(customer); });
+                marker.on('contextmenu', (e) => { openDeleteMarkerPopup(customer, e); });
+                customerLayerGroup.addLayer(marker);
+            });
+        }
+
+        async function showDebtHistoryModal(customer) {
+            activeCustomerId = customer.id;
+            document.getElementById('modalCustomerName').innerText = `👤 ลูกค้า: ${customer.name}`;
+            document.getElementById('newAmountInput').value = "";
+             
+            // Set today's date as default
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const day = String(today.getDate()).padStart(2, '0');
+            document.getElementById('newDateInput').value = `${year}-${month}-${day}`;
+             
+            document.getElementById('partialPaymentCheckbox').checked = false;
+            refreshModalHistoryData(customer.id);
+        }
+
+        async function deleteCustomerById(customerId) {
+            try {
+                const response = await fetch(`/api/customers/${customerId}`, { method: 'DELETE' });
+                if (response.ok) {
+                    customers = customers.filter(c => c.id !== customerId);
+                    customerLayerGroup.clearLayers();
+                    customers.forEach(customer => {
+                        const displayName = getShortCustomerName(customer.name);
+                        const hasDebt = customer.debt > 0;
+                        let debtHtml = hasDebt ? ` <span class="debt-amount">${customer.debt} บ.</span>` : '';
+                        let moneyIcon = L.divIcon({
+                            className: 'custom-div-icon',
+                            html: `<div class="money-label${hasDebt ? '' : ' no-debt'}">${displayName}${debtHtml}</div>`,
+                            iconSize: [0, 0]
+                        });
+                        let marker = L.marker([customer.lat, customer.lng], { icon: moneyIcon });
+                        marker.on('click', () => { showDebtHistoryModal(customer); });
+                        marker.on('contextmenu', (e) => { openDeleteMarkerPopup(customer, e); });
+                        customerLayerGroup.addLayer(marker);
+                    });
+                } else {
+                    const result = await response.json().catch(() => null);
+                    alert(result?.error || 'เกิดข้อผิดพลาดขณะลบบ้าน');
+                }
+            } catch (error) {
+                alert('ไม่สามารถเชื่อมต่อไปยังเซิร์ฟเวอร์ได้');
+            }
+        }
+
+        function openDeleteMarkerPopup(customer, event) {
+            if (event?.originalEvent) {
+                event.originalEvent.preventDefault();
+                event.originalEvent.stopPropagation();
+            }
+  
+            const displayName = getShortCustomerName(customer.name);
+            const content = `
+                <div style="text-align:center; font-size:14px;">
+                    <div style="margin-bottom: 8px;">บ้าน <strong>${displayName}</strong></div>
+                    <button class="marker-popup-btn" data-action="move" data-customer-id="${customer.id}" style="padding:6px 10px; border:none; border-radius:4px; background:#1890ff; color:white; font-weight:bold; cursor:pointer; margin-right:4px;">ย้ายตำแหน่ง</button>
+                    <button class="marker-popup-btn" data-action="delete" data-customer-id="${customer.id}" style="padding:6px 10px; border:none; border-radius:4px; background:#ff4d4f; color:white; font-weight:bold; cursor:pointer;">ลบ</button>
+                </div>
+            `;
+  
+            const popup = L.popup({ closeButton: true, autoClose: true, closeOnClick: false })
+                .setLatLng(event.latlng || [customer.lat, customer.lng])
+                .setContent(content)
+                .openOn(map);
+
+            setTimeout(() => {
+                const buttons = document.querySelectorAll('.marker-popup-btn');
+                buttons.forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const action = btn.getAttribute('data-action');
+                        const customerId = parseInt(btn.getAttribute('data-customer-id'), 10);
+                         
+                        if (action === 'move') {
+                            moveCustomerLocation(customerId);
+                        } else if (action === 'delete') {
+                            deleteCustomerById(customerId);
+                        }
+                    });
+                });
+            }, 0);
+        }
+
+        async function moveCustomerLocation(customerId) {
+            const customer = customers.find(c => c.id === customerId);
+            if (!customer) return;
+               
+            let input = prompt("ระบุตำแหน่ง (ละติจูด, ลองจิจูด):", `${customer.lat}, ${customer.lng}`);
+            if (input === null) return;
+              
+            const parts = input.split(',').map(p => parseFloat(p.trim()));
+            if (parts.length !== 2 || isNaN(parts[0]) || isNaN(parts[1])) {
+                alert('รูปแบบไม่ถูกต้อง ใช้เช่น 18.494223, 98.896086');
+                return;
+            }
+              
+            const newLat = parts[0];
+            const newLng = parts[1];
+               
+            try {
+                const response = await fetch(`/api/customers/${customerId}/location`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lat: newLat, lng: newLng })
+                });
+                   
+                if (response.ok) {
+                    customer.lat = newLat;
+                    customer.lng = newLng;
+                     
+                    const displayName = getShortCustomerName(customer.name);
+                    const hasDebt = customer.debt > 0;
+                    let debtHtml = hasDebt ? ` <span class="debt-amount">${customer.debt} บ.</span>` : '';
+                    let moneyIcon = L.divIcon({
+                        className: 'custom-div-icon',
+                        html: `<div class="money-label${hasDebt ? '' : ' no-debt'}">${displayName}${debtHtml}</div>`,
+                        iconSize: [0, 0]
+                    });
+                    let marker = L.marker([newLat, newLng], { icon: moneyIcon });
+                    marker.on('click', () => { showDebtHistoryModal(customer); });
+                    marker.on('contextmenu', (e) => { openDeleteMarkerPopup(customer, e); });
+                    
+                    customerLayerGroup.clearLayers();
+                    customers.forEach(c => {
+                        const cDisplayName = getShortCustomerName(c.name);
+                        const cHasDebt = c.debt > 0;
+                        let cDebtHtml = cHasDebt ? ` <span class="debt-amount">${c.debt} บ.</span>` : '';
+                        let cMoneyIcon = L.divIcon({
+                            className: 'custom-div-icon',
+                            html: `<div class="money-label${cHasDebt ? '' : ' no-debt'}">${cDisplayName}${cDebtHtml}</div>`,
+                            iconSize: [0, 0]
+                        });
+                        let cMarker = L.marker([c.lat, c.lng], { icon: cMoneyIcon });
+                        cMarker.on('click', () => { showDebtHistoryModal(c); });
+                        cMarker.on('contextmenu', (e) => { openDeleteMarkerPopup(c, e); });
+                        customerLayerGroup.addLayer(cMarker);
+                    });
+                } else {
+                    alert('ไม่สามารถย้ายตำแหน่งได้');
+                }
+            } catch (error) {
+                alert('ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์');
+            }
+        }
+
+        async function editCurrentCustomerName() {
+            let targetCustomer = customers.find(c => String(c.id) === String(activeCustomerId));
+            if (!targetCustomer) return;
+             
+            let newName = prompt("กรุณาระบุชื่อลูกค้าใหม่ที่ต้องการแก้ไข:", targetCustomer.name);
+            if (!newName || newName.trim() === "") return;
+
+            const trimmedName = newName.trim();
+            try {
+                const response = await fetch(`/api/customers/${activeCustomerId}/name`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: trimmedName })
+                });
+
+                const resultData = await response.json().catch(() => null);
+                if (response.ok && resultData?.success) {
+                    targetCustomer.name = resultData.name || trimmedName;
+                    document.getElementById('modalCustomerName').innerText = `👤 ลูกค้า: ${targetCustomer.name}`;
+                      
+                    const displayName = getShortCustomerName(targetCustomer.name);
+                    const hasDebt = targetCustomer.debt > 0;
+                    let debtHtml = hasDebt ? ` <span class="debt-amount">${targetCustomer.debt} บ.</span>` : '';
+                    let moneyIcon = L.divIcon({
+                        className: 'custom-div-icon',
+                        html: `<div class="money-label${hasDebt ? '' : ' no-debt'}">${displayName}${debtHtml}</div>`,
+                        iconSize: [0, 0]
+                    });
+                      
+                    customerLayerGroup.clearLayers();
+                    customers.forEach(c => {
+                        const cDisplayName = getShortCustomerName(c.name);
+                        const cHasDebt = c.debt > 0;
+                        let cDebtHtml = cHasDebt ? ` <span class="debt-amount">${c.debt} บ.</span>` : '';
+                        let cMoneyIcon = L.divIcon({
+                            className: 'custom-div-icon',
+                            html: `<div class="money-label${cHasDebt ? '' : ' no-debt'}">${cDisplayName}${cDebtHtml}</div>`,
+                            iconSize: [0, 0]
+                        });
+                        let cMarker = L.marker([c.lat, c.lng], { icon: cMoneyIcon });
+                        cMarker.on('click', () => { showDebtHistoryModal(c); });
+                        cMarker.on('contextmenu', (e) => { openDeleteMarkerPopup(c, e); });
+                        customerLayerGroup.addLayer(cMarker);
+                    });
+                    return;
+                }
+
+                throw new Error(resultData?.error || 'update failed');
+            } catch (e) {
+                targetCustomer.name = trimmedName;
+                document.getElementById('modalCustomerName').innerText = `👤 ลูกค้า: ${targetCustomer.name}`;
+                  
+                const displayName = getShortCustomerName(targetCustomer.name);
+                const hasDebt = targetCustomer.debt > 0;
+                let debtHtml = hasDebt ? ` <span class="debt-amount">${targetCustomer.debt} บ.</span>` : '';
+                let moneyIcon = L.divIcon({
+                    className: 'custom-div-icon',
+                    html: `<div class="money-label${hasDebt ? '' : ' no-debt'}">${displayName}${debtHtml}</div>`,
+                    iconSize: [0, 0]
+                });
+                  
+                customerLayerGroup.clearLayers();
+                customers.forEach(c => {
+                    const cDisplayName = getShortCustomerName(c.name);
+                    const cHasDebt = c.debt > 0;
+                    let cDebtHtml = cHasDebt ? ` <span class="debt-amount">${c.debt} บ.</span>` : '';
+                    let cMoneyIcon = L.divIcon({
+                        className: 'custom-div-icon',
+                        html: `<div class="money-label${cHasDebt ? '' : ' no-debt'}">${cDisplayName}${cDebtHtml}</div>`,
+                        iconSize: [0, 0]
+                    });
+                    let cMarker = L.marker([c.lat, c.lng], { icon: cMoneyIcon });
+                    cMarker.on('click', () => { showDebtHistoryModal(c); });
+                    cMarker.on('contextmenu', (e) => { openDeleteMarkerPopup(c, e); });
+                    customerLayerGroup.addLayer(cMarker);
+                });
+                alert("เกิดข้อผิดพลาดในการบันทึกชื่อ กรุณาลองใหม่ครับ");
+            }
+        }
+
+        async function refreshModalHistoryData(customerId) {
+            let historyList = [];
+            let loadedFromDb = false;
+            try {
+                const res = await fetch(`/api/customers/${customerId}/history?_t=${Date.now()}`, { cache: "no-store" });
+                if (res.ok) {
+                    historyList = await res.json();
+                    loadedFromDb = true;
+                }
+            } catch (e) {}
+
+            if (loadedFromDb) {
+                historyList = Array.isArray(historyList) ? historyList : [];
+            } else if (backupHistories[customerId] && backupHistories[customerId].length > 0) {
+                historyList = [...backupHistories[customerId]];
+            } else {
+                historyList = [];
+            }
+            renderModalHistoryUI(historyList);
+        }
+
+        function renderModalHistoryUI(list) {
+            let container = document.getElementById('modalHistoryContainer');
+            container.innerHTML = "";
+             
+            let calculatedTotal = 0;
+            if(list.length === 0) {
+                container.innerHTML = `<div style="color:#bfbfbf;text-align:center;padding:10px;">ไม่มีประวัติการติดหนี้</div>`;
+            } else {
+                list.forEach((h, index) => {
+                    const amountValue = Number(h.amount || 0);
+                    calculatedTotal += amountValue;
+                    let deleteTargetId = h.id !== undefined ? h.id : index;
+                    const button = document.createElement('button');
+                    button.className = 'btn-delete-item';
+                    button.textContent = 'ลบ';
+                    button.onclick = () => deleteDebtItem(activeCustomerId, deleteTargetId, index);
+
+                    const row = document.createElement('div');
+                    row.className = 'history-item';
+                    const isPartial = h.kind === 'partial_payment' || amountValue < 0;
+                    const absAmount = Math.abs(amountValue);
+                    const amountText = isPartial ? `-${absAmount}` : `+${absAmount}`;
+                    const amountColor = isPartial ? '#389e0d' : '#d4380d';
+                    const labelText = isPartial ? 'จ่ายไม่ครบ' : 'ค้างหนี้';
+                    row.innerHTML = `<div>📅 วันที่ ${h.date_record} <span style="font-weight:bold;color:${amountColor};margin-left:10px;">${amountText} บ. (${labelText})</span></div>`;
+                    row.appendChild(button);
+                    container.appendChild(row);
+                });
+            }
+            document.getElementById('modalTotalDebt').innerText = `💰 ยอดรวมหนี้ทั้งหมดปัจจุบัน: ${calculatedTotal} บาท`;
+             
+            let targetCustomer = customers.find(c => c.id === activeCustomerId);
+            if (targetCustomer && targetCustomer.debt !== calculatedTotal) {
+                targetCustomer.debt = calculatedTotal;
+                redrawMarkersSimple();
+            }
+             
+            document.getElementById('debtModal').style.display = 'flex';
+        }
+
+        async function deleteDebtItem(customerId, deleteId, arrayIndex) {
+            if (!confirm("คุณต้องการลบรายการหนี้ก้อนนี้ใช่หรือไม่?")) return;
+
+            try {
+                const response = await fetch(`/api/debt-history/${deleteId}`, {
+                    method: 'DELETE',
+                    cache: 'no-store'
+                });
+                if (!response.ok) {
+                    throw new Error('delete failed');
+                }
+            } catch (e) {
+                if (backupHistories[customerId] && backupHistories[customerId][arrayIndex]) {
+                    backupHistories[customerId].splice(arrayIndex, 1);
+                }
+            }
+
+            const freshHistory = await fetch(`/api/customers/${customerId}/history?_t=${Date.now()}`, { cache: 'no-store' });
+            let updatedList = [];
+            if (freshHistory.ok) {
+                updatedList = await freshHistory.json();
+            }
+
+            backupHistories[customerId] = Array.isArray(updatedList) ? updatedList : [];
+             
+            if (backupHistories[customerId]) {
+                const newDebt = backupHistories[customerId].reduce((sum, h) => sum + parseInt(h.amount || 0), 0);
+                const customer = customers.find(c => c.id === customerId);
+                if (customer) {
+                    customer.debt = newDebt;
+                }
+            }
+            redrawMarkersSimple();
+            await refreshModalHistoryData(customerId);
+        }
+
+        async function clearAllDebtForCurrentCustomer() {
+            if (!activeCustomerId) return;
+            const targetCustomer = customers.find(c => String(c.id) === String(activeCustomerId));
+            const customerName = targetCustomer ? targetCustomer.name : 'ลูกค้านี้';
+
+            const firstConfirm = confirm(`คุณต้องการลบหนี้ทั้งหมดของ ${customerName} ใช่หรือไม่?`);
+            if (!firstConfirm) return;
+
+            const secondConfirm = confirm(`ยืนยันอีกครั้ง: จะลบหนี้ทั้งหมดของ ${customerName} จริง ๆ ใช่หรือไม่?`);
+            if (!secondConfirm) return;
+
+            try {
+                const response = await fetch(`/api/customers/${activeCustomerId}/debt-history`, {
+                    method: 'DELETE',
+                    cache: 'no-store'
+                });
+                if (!response.ok) {
+                    throw new Error('clear failed');
+                }
+                backupHistories[activeCustomerId] = [];
+                const customer = customers.find(c => c.id === activeCustomerId);
+                if (customer) {
+                    customer.debt = 0;
+                }
+                redrawMarkersSimple();
+                await refreshModalHistoryData(activeCustomerId);
+            } catch (e) {
+                alert('ลบหนี้ทั้งหมดไม่สำเร็จ กรุณาลองใหม่ครับ');
+            }
+        }
+
+        function closeModal() { document.getElementById('debtModal').style.display = 'none'; }
+
+        async function submitNewDebt() {
+            let amount = document.getElementById('newAmountInput').value;
+            let dateValue = document.getElementById('newDateInput').value;
+            let partialPayment = document.getElementById('partialPaymentCheckbox').checked;
+              
+            if(!amount || parseInt(amount) <= 0 || !dateValue) {
+                alert("กรุณากรอกข้อมูลให้ถูกต้องครับ"); return;
+            }
+
+            // Convert YYYY-MM-DD to DD/MM
+            const [year, month, day] = dateValue.split('-');
+            const dateStr = `${day}/${month}`;
+
+            const numericAmount = parseInt(amount, 10);
+            const historyAmount = partialPayment ? -numericAmount : numericAmount;
+
+            if (backupHistories[activeCustomerId]) {
+                backupHistories[activeCustomerId].push({ amount: historyAmount, date_record: dateStr, kind: partialPayment ? 'partial_payment' : 'debt' });
+            }
+
+            try {
+                await fetch(`/api/customers/${activeCustomerId}/debt`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ amount: historyAmount, date_record: dateStr, partial_payment: partialPayment })
+                });
+            } catch(e) {}
+              
+            if (backupHistories[activeCustomerId]) {
+                const newDebt = backupHistories[activeCustomerId].reduce((sum, h) => sum + parseInt(h.amount || 0), 0);
+                const customer = customers.find(c => c.id === activeCustomerId);
+                if (customer) {
+                    customer.debt = newDebt;
+                }
+            }
+            redrawMarkersSimple();
+            await refreshModalHistoryData(activeCustomerId);
+        }
+
+        function isIosSafari() {
+            const ua = navigator.userAgent || '';
+            const isIos = /iP(hone|od|ad)/.test(navigator.platform) || (navigator.userAgent.includes('MacIntel') && navigator.maxTouchPoints > 1);
+            const isSafari = /Safari/.test(ua) && !/Chrome|CriOS|FxiOS|OPiOS|EdgiOS/.test(ua);
+            return isIos && isSafari;
+        }
+
+        function updateGpsControls() {
+            const trackBtn = document.getElementById('trackLocationBtn');
+            const requestBtn = document.getElementById('requestGpsBtn');
+            const insecureHttp = !window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1';
+
+            trackBtn.disabled = !userHasLocationPermission;
+            trackBtn.title = userHasLocationPermission ? 'กดปุ่มนี้เพื่อให้แผนที่ติดตามตำแหน่งของคุณ' : 'ขอสิทธิ์ GPS ก่อนใช้งานการติดตามตำแหน่ง';
+            requestBtn.disabled = !navigator.geolocation;
+            requestBtn.title = insecureHttp ? 'iOS/Safari อาจไม่ขอ GPS เมื่อใช้ HTTP' : 'กดเพื่อขออนุญาต GPS';
+        }
+
+        function updateGpsHint() {
+            const hintEl = document.getElementById('gpsHint');
+            if (!navigator.geolocation) {
+                hintEl.innerText = 'เบราว์เซอร์นี้ไม่รองรับ GPS';
+                return;
+            }
+            if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+                hintEl.innerText = isIosSafari()
+                    ? 'iOS/Safari บน HTTP จะไม่ขอ GPS ต้องใช้ HTTPS หรือ localhost (เช่น ngrok/Cloudflare Tunnel)'
+                    : 'เว็บนี้เป็น HTTP หากใช้ iOS อาจไม่ขอ GPS ให้ใช้ HTTPS หรือ localhost';
+            } else {
+                hintEl.innerText = navigator.onLine
+                    ? 'กด "ขออนุญาติ GPS" เพื่อให้ระบบขอสิทธิ์ตำแหน่งจากอุปกรณ์'
+                    : 'ออนไลน์ไม่ได้ ขณะนี้เป็นโหมดออฟไลน์ หน้าเว็บจะโหลดจากแคช';
+            }
+        }
+
+        function updateOnlineStatus() {
+            if (!navigator.onLine) {
+                document.getElementById('status').innerText = '⚠️ อุปกรณ์ออฟไลน์ ขณะนี้หน้าเว็บจะใช้แคชที่โหลดล่าสุด';
+            }
+            updateGpsHint();
+        }
+
+        function checkGeoPermissionState() {
+            if (isIosSafari()) {
+                // iOS Safari permissions query for geolocation is unreliable.
+                userHasLocationPermission = false;
+                document.getElementById('status').innerText = '⏳ กด "ขออนุญาติ GPS" เพื่อขอสิทธิ์จาก Safari';
+                updateGpsHint();
+                updateGpsControls();
+                return;
+            }
+
+            if (navigator.permissions && navigator.permissions.query) {
+                navigator.permissions.query({ name: 'geolocation' }).then(result => {
+                    if (result.state === 'granted') {
+                        userHasLocationPermission = true;
+                        document.getElementById('status').innerText = '✅ สิทธิ์ GPS อนุญาตแล้ว';
+                        startLocationWatch();
+                    } else if (result.state === 'prompt') {
+                        userHasLocationPermission = false;
+                        document.getElementById('status').innerText = '⏳ กรุณากดขออนุญาติ GPS แล้วอนุญาตจากอุปกรณ์';
+                    } else if (result.state === 'denied') {
+                        userHasLocationPermission = false;
+                        document.getElementById('status').innerText = '❌ สิทธิ์ GPS ถูกปฏิเสธใน Browser';
+                    }
+                    updateGpsHint();
+                    updateGpsControls();
+                    result.onchange = () => {
+                        checkGeoPermissionState();
+                    };
+                }).catch(() => {
+                    // ignore if permissions API unavailable
+                    updateGpsControls();
+                });
+            } else {
+                updateGpsControls();
+            }
+        }
+
+        function startLocationWatch() {
+            if (geoWatchId !== null) {
+                return;
+            }
+
+            if (!navigator.geolocation) {
+                document.getElementById('status').innerText = '❌ ตัวอักษรของคุณไม่รองรับ GPS';
+                updateGpsHint();
+                return;
+            }
+
+            const watchOptions = {
+                enableHighAccuracy: false,
+                timeout: 15000,
+                maximumAge: 0
+            };
+
+            geoWatchId = navigator.geolocation.watchPosition(
+                position => {
+                    let myLat = position.coords.latitude;
+                    let myLng = position.coords.longitude;
+                    currentPosition = { lat: myLat, lng: myLng };
+                    userHasLocationPermission = true;
+                    const accuracy = Math.round(position.coords.accuracy);
+                    document.getElementById('status').innerHTML = `🔵 เชื่อมต่อ GPS เรียบร้อยแล้ว (ความแม่นยำ: ${accuracy}ม.)`;
+                    updateGpsHint();
+                    let driverIcon = L.divIcon({ className: 'custom-div-icon', html: `<div class="driver-label"></div>`, iconSize: [0, 0] });
+                    if (myLocationMarker) {
+                        myLocationMarker.setLatLng([myLat, myLng]);
+                    } else {
+                        myLocationMarker = L.marker([myLat, myLng], { icon: driverIcon }).addTo(map);
+                    }
+
+                    if (isTrackingMode) {
+                        map.setView([myLat, myLng], trackingZoom, { animate: true, duration: 0.5 });
+                    }
+                },
+                error => {
+                    geoWatchId = null;
+                    userHasLocationPermission = false;
+                    let errorMsg = '⚠️ รอการระบุตำแหน่ง GPS...';
+                    if (error.code === error.PERMISSION_DENIED) {
+                        if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+                            errorMsg = '❌ iOS/Safari ปฏิเสธ GPS เพราะเว็บไม่ใช่ HTTPS หรือ localhost';
+                        } else {
+                            errorMsg = '❌ ปฏิเสธการใช้ GPS - กดปุ่ม "ขออนุญาติ GPS" แล้วอนุญาตจาก Browser';
+                        }
+                    } else if (error.code === error.POSITION_UNAVAILABLE) {
+                        errorMsg = '⚠️ ไม่สามารถหาตำแหน่งได้ - ลองไปที่ที่โล่ง';
+                    } else if (error.code === error.TIMEOUT) {
+                        errorMsg = '⏱️ หมดเวลารอ GPS - ลองใหม่อีกครั้ง';
+                    }
+                    document.getElementById('status').innerHTML = errorMsg;
+                    updateGpsHint();
+                },
+                watchOptions
+            );
+        }
+
+        function toggleTrackingMode() {
+            if (!navigator.geolocation) {
+                alert('❌ เบราว์เซอร์นี้ไม่รองรับ GPS');
+                return;
+            }
+
+            if (!userHasLocationPermission) {
+                document.getElementById('status').innerText = '⏳ กรุณาขอสิทธิ์ GPS ก่อนกดติดตามตำแหน่ง';
+                updateGpsHint();
+                requestGpsPermission();
+                return;
+            }
+
+            isTrackingMode = !isTrackingMode;
+            const btn = document.getElementById('trackLocationBtn');
+            const iconSpan = document.getElementById('trackIconSpan');
+            const textSpan = document.getElementById('trackTextSpan');
+            
+            if (isTrackingMode) {
+                btn.classList.add('active');
+                iconSpan.textContent = '📍';
+                textSpan.textContent = 'ติดตามตำแหน่ง ✓';
+                
+                startLocationWatch();
+
+                if (currentPosition) {
+                    const preferredZoom = Math.min(map.getMaxZoom(), 19);
+                    trackingZoom = Math.max(map.getZoom(), preferredZoom);
+                    map.setView([currentPosition.lat, currentPosition.lng], trackingZoom, { animate: true });
+                }
+            } else {
+                btn.classList.remove('active');
+                iconSpan.textContent = '📍';
+                textSpan.textContent = 'ติดตามตำแหน่ง';
+            }
+        }
+
+        function requestGpsPermission() {
+            if (!navigator.geolocation) {
+                alert('❌ เบราว์เซอร์นี้ไม่รองรับ GPS');
+                return;
+            }
+
+            document.getElementById('status').innerHTML = `⏳ กำลังขอสิทธิ์ GPS...`;
+            updateGpsHint();
+                
+            navigator.geolocation.getCurrentPosition(
+                position => {
+                    let myLat = position.coords.latitude;
+                    let myLng = position.coords.longitude;
+                    currentPosition = { lat: myLat, lng: myLng };
+                    userHasLocationPermission = true;
+                    document.getElementById('status').innerHTML = `✅ สิทธิ์ GPS อนุญาตสำเร็จ! (${Math.round(position.coords.accuracy)}ม.)`;
+                    updateGpsHint();
+                    
+                    let driverIcon = L.divIcon({ className: 'custom-div-icon', html: `<div class="driver-label"></div>`, iconSize: [0, 0] });
+                    if (myLocationMarker) {
+                        myLocationMarker.setLatLng([myLat, myLng]);
+                    } else {
+                        myLocationMarker = L.marker([myLat, myLng], { icon: driverIcon }).addTo(map);
+                    }
+                    
+                    if (isTrackingMode) {
+                        map.setView([myLat, myLng], trackingZoom, { animate: true });
+                    }
+                    
+                    updateGpsControls();
+                    startLocationWatch();
+                    document.getElementById('requestGpsBtn').textContent = '✓ GPS พร้อม';
+                    setTimeout(() => {
+                        document.getElementById('requestGpsBtn').innerHTML = '<span>🔄</span> <span>ขออนุญาติ GPS</span>';
+                    }, 2000);
+                },
+                error => {
+                    userHasLocationPermission = false;
+                    updateGpsControls();
+                    let errorMsg = '⚠️ ไม่สามารถขอสิทธิ์ GPS ได้';
+                    if (error.code === error.PERMISSION_DENIED) {
+                        if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+                            errorMsg = '❌ iOS/Safari ปฏิเสธการใช้ GPS เพราะเว็บไม่ใช่ HTTPS หรือ localhost';
+                        } else {
+                            errorMsg = '❌ iOS ปฏิเสธการใช้ GPS\n\nกรุณา:\n1. ไปที่ Settings\n2. ค้นหา Safari\n3. Location ตั้งเป็น "Allow While Using App"\n4. รีเฟรชหน้าเว็บ';
+                        }
+                    } else if (error.code === error.POSITION_UNAVAILABLE) {
+                        errorMsg = '⚠️ ไม่สามารถหาตำแหน่งได้ - ลองไปที่ที่โล่ง';
+                    } else if (error.code === error.TIMEOUT) {
+                        errorMsg = '⏱️ หมดเวลา - ลองใหม่อีกครั้ง';
+                    }
+                    document.getElementById('status').innerHTML = errorMsg;
+                    alert(errorMsg);
+                },
+                {
+                    enableHighAccuracy: false,
+                    timeout: 15000,
+                    maximumAge: 0
+                }
+            );
+        }
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch(() => {
+                    // ignore sw registration failure
+                });
+            });
+        }
+
+        window.onload = initMap;
+    </script>
+</body>
+</html>
