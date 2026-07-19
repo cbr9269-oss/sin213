@@ -347,6 +347,7 @@
                if(response.ok) {
                    let dbData = await response.json();
                    customers = mergeCustomersData(dbData, selectedDay, true);
+                   plotMarkers();
                    if (document.getElementById('debtModal').style.display === 'flex' && activeCustomerId) {
                        let activeCust = customers.find(c => c.id === activeCustomerId);
                        if (activeCust) {
