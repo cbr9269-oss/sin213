@@ -87,6 +87,10 @@
             transform: translate(-50%, -75%) rotate(0deg);
             transform-origin: 50% 60%;
         }
+        .leaflet-map-pane {
+            transform-origin: center center;
+            transition: transform 0.2s ease;
+        }
 
         /* หน้าตากลุ่มหมุด Cluster */
         .marker-cluster-small { background-color: rgba(24, 144, 255, 0.6); }
@@ -178,7 +182,7 @@
         let customerLayerGroup; 
         let myLocationMarker = null;
         let myLocationCircle = null;
-        let currentHeading = 0;
+        let currentHeading = null;
         let orientationListenerActive = false;
         let customers = [];
         let activeCustomerId = null;
@@ -238,7 +242,10 @@
                 if (isTrackingMode) {
                     trackingZoom = map.getZoom();
                 }
+                applyMapRotation();
             });
+            map.on('move', applyMapRotation);
+            map.on('resize', applyMapRotation);
             
             checkGeoPermissionState();
             updateGpsHint();
@@ -942,10 +949,11 @@
             } else if (typeof event.alpha === 'number') {
                 heading = 360 - event.alpha;
             }
-
+ 
             if (heading !== null && !Number.isNaN(heading)) {
                 currentHeading = (heading + 360) % 360;
                 updateDriverHeading();
+                applyMapRotation();
             }
         }
 
@@ -962,12 +970,25 @@
         }
 
         function updateDriverHeading() {
-            if (!myLocationMarker) return;
+            if (!myLocationMarker || currentHeading === null) return;
             const markerEl = myLocationMarker.getElement();
             if (!markerEl) return;
             const arrow = markerEl.querySelector('.driver-arrow');
             if (!arrow) return;
             arrow.style.transform = `translate(-50%, -75%) rotate(${currentHeading}deg)`;
+        }
+
+        function applyMapRotation() {
+            const mapPane = map?.getPane('mapPane');
+            if (!mapPane) return;
+            let baseTransform = mapPane.style.transform || '';
+            baseTransform = baseTransform.replace(/\s*rotate\([^)]*\)/g, '').trim();
+            if (!isTrackingMode || currentHeading === null) {
+                mapPane.style.transform = baseTransform;
+                return;
+            }
+            const angle = -currentHeading;
+            mapPane.style.transform = `${baseTransform} rotate(${angle}deg)`;
         }
 
         function updateLocationMarker(lat, lng, accuracy) {
@@ -1028,10 +1049,14 @@
                     const accuracy = Math.round(position.coords.accuracy);
                     document.getElementById('status').innerHTML = `🔵 เชื่อมต่อ GPS เรียบร้อยแล้ว (ความแม่นยำ: ${accuracy}ม.)`;
                     updateGpsHint();
+                    if (position.coords.heading !== null && !Number.isNaN(position.coords.heading)) {
+                        currentHeading = (position.coords.heading + 360) % 360;
+                    }
                     updateLocationMarker(myLat, myLng, accuracy);
                     if (isTrackingMode) {
                         map.setView([myLat, myLng], trackingZoom, { animate: true, duration: 0.5 });
                         enableDeviceOrientation();
+                        applyMapRotation();
                     }
                 },
                 error => {
@@ -1088,12 +1113,14 @@
                     const preferredZoom = Math.min(map.getMaxZoom(), 19);
                     trackingZoom = Math.max(map.getZoom(), preferredZoom);
                     map.setView([currentPosition.lat, currentPosition.lng], trackingZoom, { animate: true });
+                    applyMapRotation();
                 }
             } else {
                 btn.classList.remove('active');
                 iconSpan.textContent = '📍';
                 textSpan.textContent = 'ติดตามตำแหน่ง';
                 disableDeviceOrientation();
+                applyMapRotation();
             }
         }
 
