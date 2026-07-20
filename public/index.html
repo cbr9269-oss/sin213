@@ -87,10 +87,6 @@
             transform: translate(-50%, -75%) rotate(0deg);
             transform-origin: 50% 60%;
         }
-        .leaflet-map-pane {
-            transform-origin: center center;
-            transition: transform 0.2s ease;
-        }
 
         /* หน้าตากลุ่มหมุด Cluster */
         .marker-cluster-small { background-color: rgba(24, 144, 255, 0.6); }
@@ -242,10 +238,7 @@
                 if (isTrackingMode) {
                     trackingZoom = map.getZoom();
                 }
-                applyMapRotation();
             });
-            map.on('move', applyMapRotation);
-            map.on('resize', applyMapRotation);
             
             checkGeoPermissionState();
             updateGpsHint();
@@ -953,7 +946,6 @@
             if (heading !== null && !Number.isNaN(heading)) {
                 currentHeading = (heading + 360) % 360;
                 updateDriverHeading();
-                applyMapRotation();
             }
         }
 
@@ -976,19 +968,6 @@
             const arrow = markerEl.querySelector('.driver-arrow');
             if (!arrow) return;
             arrow.style.transform = `translate(-50%, -75%) rotate(${currentHeading}deg)`;
-        }
-
-        function applyMapRotation() {
-            const mapPane = map?.getPane('mapPane');
-            if (!mapPane) return;
-            let baseTransform = mapPane.style.transform || '';
-            baseTransform = baseTransform.replace(/\s*rotate\([^)]*\)/g, '').trim();
-            if (!isTrackingMode || currentHeading === null) {
-                mapPane.style.transform = baseTransform;
-                return;
-            }
-            const angle = -currentHeading;
-            mapPane.style.transform = `${baseTransform} rotate(${angle}deg)`;
         }
 
         function updateLocationMarker(lat, lng, accuracy) {
@@ -1056,7 +1035,6 @@
                     if (isTrackingMode) {
                         map.setView([myLat, myLng], trackingZoom, { animate: true, duration: 0.5 });
                         enableDeviceOrientation();
-                        applyMapRotation();
                     }
                 },
                 error => {
@@ -1113,14 +1091,12 @@
                     const preferredZoom = Math.min(map.getMaxZoom(), 19);
                     trackingZoom = Math.max(map.getZoom(), preferredZoom);
                     map.setView([currentPosition.lat, currentPosition.lng], trackingZoom, { animate: true });
-                    applyMapRotation();
                 }
             } else {
                 btn.classList.remove('active');
                 iconSpan.textContent = '📍';
                 textSpan.textContent = 'ติดตามตำแหน่ง';
                 disableDeviceOrientation();
-                applyMapRotation();
             }
         }
 
